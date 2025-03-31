@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Building Serverless Applications with AWS SAM
+
+Parameters:
+  AppName:
+    Description: Name of application.
+    Type: String
+  ApiStageName:
+    Description: Name of API stage.
+    Type: String
+
+Globals:
+  Function:
+    CodeUri: src/
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    Timeout: 3
+
+Resources:
+  # DynamoDB table to store data with stream enabled:
+  VotesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AppName}-table'
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+
+  # API Gateway REST API with CORS configured:
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${AppName}-api'
+      StageName: !Ref ApiStageName
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+        MaxAge: "'0'"
+
+  # Lambda Function that scans the DynamoDB table:
+  ScanDynamoDBFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AppName}-scan-dynamodb-function'
+      Handler: scan-dynamodb.handler
+      # DynamoDB read access is required.
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref VotesTable
+      Environment:
+        Variables:
+          DDB_TABLE_NAME: !Ref VotesTable
+      # Function invocation: API GET method on /votes resource.
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /votes
+            Method: GET
+
+  # Lambda Function that updates the DynamoDB table:
+  UpdateDynamoDBFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AppName}-update-dynamodb-function'
+      Handler: update-dynamodb.handler
+      # DynamoDB write access is required.
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref VotesTable
+      Environment:
+        Variables:
+          DDB_TABLE_NAME: !Ref VotesTable
+      # Function invocation: API POST method on /votes resource.
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /votes
+            Method: POST
+
+Outputs:
+  ApiEndpoint:
+    Description: 'API Gateway Endpoint'
+    Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}'
