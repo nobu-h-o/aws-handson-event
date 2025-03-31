@@ -9,6 +9,13 @@ Parameters:
   ApiStageName:
     Description: Name of API stage.
     Type: String
+  # Parameters required for realtime updates using IoT Core:
+  IotEndpoint:
+    Description: IoT device data endpoint.
+    Type: String
+  IotTopicName:
+    Description: IoT topic name.
+    Type: String
 
 Globals:
   Function:
@@ -93,8 +100,92 @@ Resources:
             RestApiId: !Ref RestApi
             Path: /votes
             Method: POST
-
+    # Cognito and IAM resources required to allow unauthenticated web users to subscribe to an IoT topic for real-time updates:
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AppName}-user-pool'
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: Web
+      UserPoolId:
+        Ref: CognitoUserPool
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub '${AppName}-identity-pool'
+      AllowUnauthenticatedIdentities: true
+      CognitoIdentityProviders:
+        - ProviderName: !GetAtt CognitoUserPool.ProviderName 
+          ClientId: !Ref CognitoUserPoolClient
+  CognitoUnauthRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref CognitoIdentityPool
+              ForAnyValue:StringLike:
+                'cognito-identity.amazonaws.com:amr': unauthenticated
+      Policies:
+        - PolicyName: !Sub '${AppName}-unauth-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: iot:Connect
+                Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:client/*'
+              - Effect: Allow
+                Action: iot:Receive
+                Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/${IotTopicName}'
+              - Effect: Allow
+                Action: iot:Subscribe
+                Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/${IotTopicName}'
+  IdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        unauthenticated: !GetAtt CognitoUnauthRole.Arn
+  # Lambda Function integrated with the DyanmoDB stream that publishes data to an IoT topic for real-time updates:
+  StreamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AppName}-stream-iot-function'
+      Handler: stream-iot.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VotesTable
+        - Statement:
+          - Effect: Allow
+            Action: iot:Publish
+            Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/${IotTopicName}'
+      Environment:
+        Variables:
+          IOT_ENDPOINT: !Ref IotEndpoint
+          IOT_TOPIC: !Ref IotTopicName
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt VotesTable.StreamArn
+            BatchSize: 100
+            StartingPosition: TRIM_HORIZON
 Outputs:
   ApiEndpoint:
     Description: 'API Gateway Endpoint'
     Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}'
+  # Outputs required for realtime updates using IoT Core:
+  CognitoIdentityPoolId:
+    Description: 'Cognito Identity Pool Id'
+    Value: !Ref CognitoIdentityPool
+  IotEndpoint:
+    Description: 'IoT device data endpoint.'
+    Value: !Ref IotEndpoint
