@@ -78,29 +78,55 @@ Resources:
             RestApiId: !Ref RestApi
             Path: /votes
             Method: GET
+  # Standard SQS Queue:
+  SqsQueue:
+    Type: AWS::SQS::Queue
 
-  # Lambda Function that updates the DynamoDB table:
-  UpdateDynamoDBFunction:
+  # Lambda Function that publishes a message to the SQS queue:
+  SqsPublishFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${AppName}-update-dynamodb-function'
-      Handler: update-dynamodb.handler
-      # DynamoDB write access is required.
+      FunctionName: !Sub '${AppName}-sqs-publish-function'
+      Handler: sqs-publish.handler
+      # SQS SendMessage access is required:
       Policies:
-        - DynamoDBWritePolicy:
-            TableName: !Ref VotesTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsQueue.QueueName
       Environment:
         Variables:
-          DDB_TABLE_NAME: !Ref VotesTable
+          SQS_QUEUE_URL: !Ref SqsQueue
       # Function invocation: API POST method on /votes resource.
       Events:
-        ApiEvent:
+        PostVotes:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
             Path: /votes
             Method: POST
-    # Cognito and IAM resources required to allow unauthenticated web users to subscribe to an IoT topic for real-time updates:
+  # Lambda Function that updates the DynamoDB table:
+  UpdateDynamoDBFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AppName}-sqs-update-dynamodb-function'
+      Handler: sqs-update-dynamodb.handler
+      # DynamoDB write access and SQS poller access is required.
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref VotesTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt SqsQueue.QueueName
+      Environment:
+        Variables:
+          DDB_TABLE_NAME: !Ref VotesTable
+      # Function invocation: Lambda polls SQS Queue.
+      Events:
+        SqsEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SqsQueue.Arn
+            BatchSize: 10
+            Enabled: true
+  # Cognito and IAM resources required to allow unauthenticated web users to subscribe to an IoT topic for real-time updates:
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
