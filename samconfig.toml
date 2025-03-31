@@ -18,7 +18,7 @@ confirm_changeset = true
 resolve_s3 = true
 s3_prefix = "sam-app"
 region = "us-east-1"
-parameter_overrides = "AppName=\"voting-service\" ApiStageName=\"dev\""
+parameter_overrides = "AppName=\"voting-service\" ApiStageName=\"dev\" IotEndpoint=\"a2l5pi5xg5fagt-ats.iot.us-east-1.amazonaws.com\" IotTopicName=\"votes\""
 image_repositories = []
 
 [default.package.parameters]
